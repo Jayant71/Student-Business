@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronUp, Check, X, Phone, MessageCircle, AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, Check, X, Phone, MessageCircle, AlertCircle, RefreshCw, Loader2, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { CTASubmission } from '../../types';
-import { supabase } from '@/src/lib/supabase';
+import { ctaService, CTAFilters } from '../../src/services/cta-service';
 import { useToast } from '@/src/context/ToastContext';
 
 const TIME_SLOT_LABELS: Record<string, string> = {
@@ -16,12 +16,16 @@ type StatusFilter = 'all' | 'new' | 'approved' | 'rejected';
 export const CTAReview: React.FC = () => {
     const toast = useToast();
     const [submissions, setSubmissions] = useState<CTASubmission[]>([]);
+    const [totalCount, setTotalCount] = useState(0);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [expandedRow, setExpandedRow] = useState<string | null>(null);
     const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+    const [searchTerm, setSearchTerm] = useState('');
+    const [currentPage, setCurrentPage] = useState(1);
     const [updatingId, setUpdatingId] = useState<string | null>(null);
+    const pageSize = 20;
 
     const fetchSubmissions = useCallback(async (isManualRefresh = false) => {
         try {
@@ -32,13 +36,17 @@ export const CTAReview: React.FC = () => {
             }
             setError(null);
 
-            const { data, error } = await supabase
-                .from('cta_submissions')
-                .select('*')
-                .order('submission_date', { ascending: false });
+            const filters: CTAFilters = {
+                status: statusFilter === 'all' ? undefined : statusFilter,
+                searchTerm: searchTerm.trim() || undefined,
+                limit: pageSize,
+                offset: (currentPage - 1) * pageSize
+            };
 
-            if (error) throw error;
-            setSubmissions(data || []);
+            const { data, count } = await ctaService.list(filters);
+
+            setSubmissions(data);
+            setTotalCount(count);
 
             if (isManualRefresh) {
                 toast.showSuccess('Enquiries refreshed');
@@ -56,27 +64,18 @@ export const CTAReview: React.FC = () => {
                 setLoading(false);
             }
         }
-    }, [toast]);
+    }, [toast, statusFilter, searchTerm, currentPage]);
 
     useEffect(() => {
         fetchSubmissions();
-
-        const subscription = supabase
-            .channel('cta_review_live')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'cta_submissions' }, () => {
-                fetchSubmissions();
-            })
-            .subscribe();
-
-        return () => {
-            subscription.unsubscribe();
-        };
     }, [fetchSubmissions]);
 
-    const filteredSubmissions = useMemo(() => {
-        if (statusFilter === 'all') return submissions;
-        return submissions.filter((submission) => submission.status === statusFilter);
-    }, [submissions, statusFilter]);
+    useEffect(() => {
+        // Reset to page 1 when filters change
+        setCurrentPage(1);
+    }, [statusFilter, searchTerm]);
+
+    const totalPages = Math.ceil(totalCount / pageSize);
 
     const statusBadgeClass = (status: CTASubmission['status']) => {
         switch (status) {
@@ -92,13 +91,15 @@ export const CTAReview: React.FC = () => {
     const handleStatusChange = async (id: string, nextStatus: 'approved' | 'rejected') => {
         try {
             setUpdatingId(id);
-            const { error } = await supabase
-                .from('cta_submissions')
-                .update({ status: nextStatus })
-                .eq('id', id);
 
-            if (error) throw error;
+            if (nextStatus === 'approved') {
+                await ctaService.approve(id);
+            } else {
+                await ctaService.reject(id);
+            }
+
             toast.showSuccess(`Enquiry marked as ${nextStatus}.`);
+            fetchSubmissions(true); // Refresh the list
         } catch (err: any) {
             console.error('Failed to update CTA status', err);
             toast.showError('Failed to update enquiry', err.message || 'Please try again.');
@@ -161,18 +162,9 @@ export const CTAReview: React.FC = () => {
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
                 <div>
                     <h1 className="text-2xl font-bold text-dark">Enquiry Review</h1>
-                    <p className="text-gray-500 text-sm">{submissions.length} leads captured from the landing CTA.</p>
+                    <p className="text-gray-500 text-sm">{totalCount} total leads captured from the landing CTA.</p>
                 </div>
                 <div className="flex flex-wrap gap-2 items-center">
-                    {(['all', 'new', 'approved', 'rejected'] as StatusFilter[]).map((status) => (
-                        <button
-                            key={status}
-                            onClick={() => setStatusFilter(status)}
-                            className={`px-3 py-1.5 text-xs font-semibold rounded-full border ${statusFilter === status ? 'bg-primary text-white border-primary' : 'bg-white text-gray-600 border-gray-200'}`}
-                        >
-                            {status === 'all' ? 'All' : status.charAt(0).toUpperCase() + status.slice(1)}
-                        </button>
-                    ))}
                     <Button
                         variant="outline"
                         size="sm"
@@ -186,8 +178,33 @@ export const CTAReview: React.FC = () => {
                 </div>
             </div>
 
+            {/* Search and Filters */}
+            <div className="flex flex-col sm:flex-row gap-3">
+                <div className="relative flex-1">
+                    <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input
+                        type="text"
+                        placeholder="Search by name, email, or phone..."
+                        className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary/50 focus:border-primary outline-none"
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                    />
+                </div>
+                <div className="flex gap-2">
+                    {(['all', 'new', 'approved', 'rejected'] as StatusFilter[]).map((status) => (
+                        <button
+                            key={status}
+                            onClick={() => setStatusFilter(status)}
+                            className={`px-3 py-1.5 text-xs font-semibold rounded-full border ${statusFilter === status ? 'bg-primary text-white border-primary' : 'bg-white text-gray-600 border-gray-200'}`}
+                        >
+                            {status === 'all' ? 'All' : status.charAt(0).toUpperCase() + status.slice(1)}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                {filteredSubmissions.length === 0 ? (
+                {submissions.length === 0 && !loading ? (
                     <div className="p-12 text-center text-gray-500 text-sm">
                         No enquiries found for this filter.
                     </div>
@@ -204,7 +221,7 @@ export const CTAReview: React.FC = () => {
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 text-sm">
-                            {filteredSubmissions.map((lead) => (
+                            {submissions.map((lead) => (
                                 <React.Fragment key={lead.id}>
                                     <tr className="hover:bg-gray-50 transition-colors">
                                         <td className="px-6 py-4">
@@ -300,6 +317,40 @@ export const CTAReview: React.FC = () => {
                             ))}
                         </tbody>
                     </table>
+                )}
+
+                {/* Pagination Controls */}
+                {totalCount > pageSize && (
+                    <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between bg-gray-50">
+                        <div className="text-sm text-gray-600">
+                            Showing {((currentPage - 1) * pageSize) + 1} to {Math.min(currentPage * pageSize, totalCount)} of {totalCount} submissions
+                        </div>
+                        <div className="flex gap-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                                disabled={currentPage === 1 || loading}
+                                className="gap-1"
+                            >
+                                <ChevronLeft size={16} />
+                                Previous
+                            </Button>
+                            <div className="flex items-center px-3 text-sm font-medium text-gray-700">
+                                Page {currentPage} of {Math.ceil(totalCount / pageSize)}
+                            </div>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setCurrentPage((prev) => Math.min(Math.ceil(totalCount / pageSize), prev + 1))}
+                                disabled={currentPage >= Math.ceil(totalCount / pageSize) || loading}
+                                className="gap-1"
+                            >
+                                Next
+                                <ChevronRight size={16} />
+                            </Button>
+                        </div>
+                    </div>
                 )}
             </div>
         </div>

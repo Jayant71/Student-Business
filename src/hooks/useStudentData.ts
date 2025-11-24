@@ -16,11 +16,20 @@ interface Recording {
   session_date?: string;
 }
 
+export interface StudentProgress {
+  progress_percentage: number;
+  total_assignments: number;
+  completed_assignments: number;
+  total_sessions: number;
+  attended_sessions: number;
+}
+
 export interface StudentDataState {
   profile: UserProfile | null;
   upcomingSession: any | null;
   pendingAssignments: StudentAssignmentView[];
   recentRecordings: Recording[];
+  progress: StudentProgress | null;
   loading: boolean;
   error: string | null;
   retryFetch: () => Promise<void>;
@@ -37,6 +46,7 @@ export const useStudentData = (): StudentDataState => {
   const [upcomingSession, setUpcomingSession] = useState<Session | null>(null);
   const [pendingAssignments, setPendingAssignments] = useState<StudentAssignmentView[]>([]);
   const [recentRecordings, setRecentRecordings] = useState<Recording[]>([]);
+  const [progress, setProgress] = useState<StudentProgress | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
@@ -114,6 +124,24 @@ export const useStudentData = (): StudentDataState => {
 
       setRecentRecordings(recentRecordingsData);
 
+      // Fetch student progress
+      const { data: progressData, error: progressError } = await supabase
+        .rpc('get_student_progress', { student_user_id: user.id });
+
+      if (progressError) {
+        console.error('Error fetching student progress:', progressError);
+        // Set default progress if error
+        setProgress({
+          progress_percentage: 0,
+          total_assignments: 0,
+          completed_assignments: 0,
+          total_sessions: 0,
+          attended_sessions: 0
+        });
+      } else {
+        setProgress(progressData);
+      }
+
       if (isRetry) {
         toast.showSuccess('Data refreshed successfully');
       }
@@ -179,6 +207,7 @@ export const useStudentData = (): StudentDataState => {
     upcomingSession,
     pendingAssignments,
     recentRecordings,
+    progress,
     loading,
     error,
     retryFetch,

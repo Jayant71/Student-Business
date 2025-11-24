@@ -7,16 +7,30 @@ import { errorLogger } from '../services/error-logger';
 interface AdminStats {
   total_leads: number;
   emails_sent: number;
-  cta_new: number;
   cta_approved: number;
   payments_paid: number;
-  upcoming_sessions: number;
+  lead_change: number;
+  email_change: number;
+  cta_change: number;
+  payment_change: number;
+  last_updated: string;
+}
+
+interface ActivityItem {
+  type: 'cta_submission' | 'payment' | 'imported_lead';
+  id: string;
+  name: string;
+  email: string;
+  description: string;
+  time: string;
+  metadata: any;
 }
 
 export const useAdminData = () => {
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [recentActivity, setRecentActivity] = useState<ActivityItem[]>([]);
   const [ctaSubmissions, setCTASubmissions] = useState<CTASubmission[]>([]);
   const [importedLeads, setImportedLeads] = useState<ImportedLead[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
@@ -42,10 +56,15 @@ export const useAdminData = () => {
       setLoading(true);
       setError(null);
       
-      // Fetch stats using existing RPC function
-      const { data: statsData, error: statsError } = await supabase.rpc('get_admin_dashboard_stats');
+      // Fetch stats using new RPC function with trends
+      const { data: statsData, error: statsError } = await supabase.rpc('get_admin_stats');
       if (statsError) throw statsError;
       setStats(statsData);
+
+      // Fetch recent activity feed
+      const { data: activityData, error: activityError } = await supabase.rpc('get_recent_activity', { limit_count: 10 });
+      if (activityError) throw activityError;
+      setRecentActivity(activityData || []);
 
       // Fetch recent CTA submissions
       const { data: ctaData, error: ctaError } = await supabase
@@ -172,6 +191,7 @@ export const useAdminData = () => {
     stats,
     loading,
     error,
+    recentActivity,
     ctaSubmissions,
     importedLeads,
     payments,

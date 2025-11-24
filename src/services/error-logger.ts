@@ -35,6 +35,7 @@ class ErrorLogger {
   private errorQueue: ErrorLog[] = [];
   private flushInterval: number;
   private flushTimer: NodeJS.Timeout | null = null;
+  private isDestroyed: boolean = false;
 
   constructor() {
     this.isEnabled = import.meta.env.PROD; // Only enable in production
@@ -51,8 +52,8 @@ class ErrorLogger {
    * Log an error to Supabase
    */
   async logError(errorData: Omit<ErrorLog, 'id' | 'created_at'>): Promise<string | null> {
-    if (!this.isEnabled) {
-      console.warn('Error logging is disabled in development');
+    if (!this.isEnabled || this.isDestroyed) {
+      console.warn('Error logging is disabled or logger is destroyed');
       return null;
     }
 
@@ -69,6 +70,12 @@ class ErrorLogger {
         timestamp: new Date().toISOString(),
       };
 
+      // Validate error log data
+      if (!this.validateErrorLog(errorLog)) {
+        console.warn('Invalid error log data:', errorLog);
+        return null;
+      }
+
       // Add to queue for batch processing
       this.errorQueue.push(errorLog);
 
@@ -84,6 +91,19 @@ class ErrorLogger {
     }
   }
 
+  private validateErrorLog(errorLog: ErrorLog): boolean {
+    return (
+      errorLog &&
+      typeof errorLog.error === 'string' &&
+      errorLog.error.length > 0 &&
+      typeof errorLog.timestamp === 'string' &&
+      typeof errorLog.user_agent === 'string' &&
+      typeof errorLog.url === 'string' &&
+      ['react-error-boundary', 'api-error', 'unhandled-rejection', 'network-error', 'custom'].includes(errorLog.type) &&
+      ['low', 'medium', 'high', 'critical'].includes(errorLog.severity)
+    );
+  }
+
   /**
    * Log error with automatic categorization
    */
@@ -96,59 +116,103 @@ class ErrorLogger {
       componentStack?: string;
     } = {}
   ): Promise<string | null> {
+    if (this.isDestroyed) return null;
+
     const errorMessage = typeof error === 'string' ? error : error.message;
     const errorStack = typeof error === 'string' ? undefined : error.stack;
+
+    // Validate inputs
+    if (!errorMessage || errorMessage.trim().length === 0) {
+      console.warn('Cannot log empty error message');
+      return null;
+    }
 
     // Auto-determine severity based on error content
     let severity = context.severity || 'medium';
     if (!severity) {
-      if (errorMessage.toLowerCase().includes('critical') || 
-          errorMessage.toLowerCase().includes('fatal')) {
+      const lowerMessage = errorMessage.toLowerCase();
+      if (lowerMessage.includes('critical') ||
+          lowerMessage.includes('fatal') ||
+          lowerMessage.includes('uncaught')) {
         severity = 'critical';
-      } else if (errorMessage.toLowerCase().includes('network') ||
-                 errorMessage.toLowerCase().includes('timeout')) {
+      } else if (lowerMessage.includes('network') ||
+                 lowerMessage.includes('timeout') ||
+                 lowerMessage.includes('connection')) {
         severity = 'high';
-      } else if (errorMessage.toLowerCase().includes('warning')) {
+      } else if (lowerMessage.includes('warning')) {
         severity = 'low';
       }
     }
 
+    // Sanitize context to avoid circular references
+    const sanitizedContext = context.context ? this.sanitizeContext(context.context) : undefined;
+
     return this.logError({
-      error: errorMessage,
-      stack: errorStack,
-      component_stack: context.componentStack,
+      error: errorMessage.substring(0, 2000), // Limit error message length
+      stack: errorStack?.substring(0, 5000), // Limit stack trace length
+      component_stack: context.componentStack?.substring(0, 2000),
       type: context.type || 'custom',
       severity,
-      context: context.context,
+      context: sanitizedContext,
       user_agent: navigator.userAgent,
       url: window.location.href,
       timestamp: new Date().toISOString(),
     });
   }
 
+  private sanitizeContext(context: Record<string, any>): Record<string, any> {
+    try {
+      return JSON.parse(JSON.stringify(context, (key, value) => {
+        // Handle circular references and non-serializable values
+        if (typeof value === 'function') return '[Function]';
+        if (value instanceof Error) return value.toString();
+        if (value && typeof value === 'object') {
+          if (value.constructor === Object || Array.isArray(value)) {
+            return value;
+          }
+          return '[Object]';
+        }
+        return value;
+      }));
+    } catch (error) {
+      console.warn('Failed to sanitize context:', error);
+      return { error: 'Failed to serialize context' };
+    }
+  }
+
   /**
    * Flush queued errors to Supabase
    */
   private async flushErrors(): Promise<void> {
-    if (this.errorQueue.length === 0) return;
+    if (this.errorQueue.length === 0 || this.isDestroyed) return;
 
     const errorsToFlush = [...this.errorQueue];
     this.errorQueue = [];
 
     try {
+      // Limit batch size to prevent overwhelming the database
+      const batchSize = Math.min(errorsToFlush.length, 50);
+      const batch = errorsToFlush.slice(0, batchSize);
+
       const { error } = await supabase
         .from('error_logs')
-        .insert(errorsToFlush);
+        .insert(batch);
 
       if (error) {
         console.error('Failed to insert error logs:', error);
-        // Re-add errors to queue for retry
-        this.errorQueue.unshift(...errorsToFlush);
+        // Re-add errors to queue for retry (with limit)
+        this.errorQueue.unshift(...errorsToFlush.slice(0, this.batchSize));
+      } else {
+        // If successful and there were more errors, flush the rest
+        if (errorsToFlush.length > batchSize) {
+          this.errorQueue.unshift(...errorsToFlush.slice(batchSize));
+          setTimeout(() => this.flushErrors(), 1000); // Delay next batch
+        }
       }
     } catch (error) {
       console.error('Failed to flush errors:', error);
-      // Re-add errors to queue for retry
-      this.errorQueue.unshift(...errorsToFlush);
+      // Re-add errors to queue for retry (with limit)
+      this.errorQueue.unshift(...errorsToFlush.slice(0, this.batchSize));
     }
   }
 
@@ -161,7 +225,9 @@ class ErrorLogger {
     }
 
     this.flushTimer = setInterval(() => {
-      this.flushErrors();
+      if (!this.isDestroyed) {
+        this.flushErrors();
+      }
     }, this.flushInterval);
   }
 
@@ -169,30 +235,38 @@ class ErrorLogger {
    * Setup global error handlers
    */
   private setupGlobalErrorHandlers(): void {
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      if (!this.isDestroyed) {
+        this.logErrorAuto(event.reason, {
+          type: 'unhandled-rejection',
+          severity: 'high',
+          context: {
+            promise: event.promise.toString(),
+            reason: event.reason?.toString()
+          }
+        });
+      }
+    };
+
+    const handleError = (event: ErrorEvent) => {
+      if (!this.isDestroyed) {
+        this.logErrorAuto(event.error || event.message, {
+          type: 'react-error-boundary',
+          severity: 'critical',
+          context: {
+            filename: event.filename,
+            lineno: event.lineno,
+            colno: event.colno
+          }
+        });
+      }
+    };
+
     // Handle unhandled promise rejections
-    window.addEventListener('unhandledrejection', (event) => {
-      this.logErrorAuto(event.reason, {
-        type: 'unhandled-rejection',
-        severity: 'high',
-        context: {
-          promise: event.promise.toString(),
-          reason: event.reason?.toString()
-        }
-      });
-    });
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
 
     // Handle uncaught errors (though ErrorBoundary should catch most)
-    window.addEventListener('error', (event) => {
-      this.logErrorAuto(event.error || event.message, {
-        type: 'react-error-boundary',
-        severity: 'critical',
-        context: {
-          filename: event.filename,
-          lineno: event.lineno,
-          colno: event.colno
-        }
-      });
-    });
+    window.addEventListener('error', handleError);
   }
 
   /**
@@ -239,7 +313,11 @@ class ErrorLogger {
       });
 
       const mostCommonErrors = Object.entries(errorCounts)
-        .map(([error, data]) => ({ error, ...data }))
+        .map(([error, data]) => ({
+          error,
+          count: data.count,
+          last_occurred: data.lastOccurred
+        }))
         .sort((a, b) => b.count - a.count)
         .slice(0, 10);
 
@@ -248,7 +326,7 @@ class ErrorLogger {
         errors_by_type: errorsByType,
         errors_by_severity: errorsBySeverity,
         recent_errors: errors.slice(0, 50),
-        most_common_errors
+        most_common_errors: mostCommonErrors
       };
     } catch (error) {
       console.error('Failed to get error summary:', error);
@@ -317,13 +395,37 @@ class ErrorLogger {
    * Cleanup method
    */
   destroy(): void {
+    this.isDestroyed = true;
+    
     if (this.flushTimer) {
       clearInterval(this.flushTimer);
       this.flushTimer = null;
     }
     
     // Flush any remaining errors
-    this.flushErrors();
+    this.flushErrors().catch(error => {
+      console.error('Error during final flush:', error);
+    });
+  }
+
+  /**
+   * Get current queue status
+   */
+  getQueueStatus(): { queueLength: number; isEnabled: boolean; isDestroyed: boolean } {
+    return {
+      queueLength: this.errorQueue.length,
+      isEnabled: this.isEnabled,
+      isDestroyed: this.isDestroyed
+    };
+  }
+
+  /**
+   * Force flush all queued errors
+   */
+  async forceFlush(): Promise<void> {
+    if (this.errorQueue.length > 0) {
+      await this.flushErrors();
+    }
   }
 }
 

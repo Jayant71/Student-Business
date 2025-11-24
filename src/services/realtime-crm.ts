@@ -6,56 +6,76 @@ export class RealtimeCRMService {
   private subscriptions: Map<string, any> = new Map();
   private typingTimeouts: Map<string, NodeJS.Timeout> = new Map();
   private eventHandlers: Map<string, ((event: RealtimeEvent) => void)[]> = new Map();
+  private isDestroyed: boolean = false;
 
   constructor() {
     this.setupNetworkListeners();
   }
 
   // Subscribe to real-time updates for a specific contact
-  subscribeToContact(contactId: string, userId: string) {
+  subscribeToContact(contactId: string, userId?: string): any {
+    if (this.isDestroyed) {
+      console.warn('RealtimeCRMService is destroyed, cannot subscribe');
+      return null;
+    }
+
     const channelName = `crm_contact_${contactId}`;
     
     // Unsubscribe from existing channel if any
     this.unsubscribeFromContact(contactId);
 
-    const channel = supabase
-      .channel(channelName)
-      .on('postgres_changes', 
-        { 
-          event: '*', 
-          schema: 'public', 
-          table: 'crm_messages',
-          filter: `user_id=eq.${contactId}` 
-        },
-        (payload) => this.handleMessageChange(payload)
-      )
-      .on('postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'typing_indicators',
-          filter: `contact_id=eq.${contactId}`
-        },
-        (payload) => this.handleTypingIndicator(payload)
-      )
-      .subscribe((status) => {
-        console.log(`Realtime subscription status for ${contactId}:`, status);
-        if (status === 'SUBSCRIBED') {
-          this.emit('connected', { type: 'connected', payload: { contactId }, timestamp: new Date().toISOString() });
-        } else if (status === 'CHANNEL_ERROR') {
-          this.emit('error', { type: 'error', payload: { contactId, error: 'Connection failed' }, timestamp: new Date().toISOString() });
-        }
-      });
+    try {
+      const channel = supabase
+        .channel(channelName)
+        .on('postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'crm_messages',
+            filter: `user_id=eq.${contactId}`
+          },
+          (payload) => this.handleMessageChange(payload)
+        )
+        .on('postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'typing_indicators',
+            filter: `contact_id=eq.${contactId}`
+          },
+          (payload) => this.handleTypingIndicator(payload)
+        )
+        .subscribe((status) => {
+          console.log(`Realtime subscription status for ${contactId}:`, status);
+          if (status === 'SUBSCRIBED') {
+            this.emit('message', { type: 'message', payload: { contactId }, timestamp: new Date().toISOString() });
+          } else if (status === 'CHANNEL_ERROR') {
+            this.emit('error', { type: 'error', payload: { contactId, error: 'Connection failed' }, timestamp: new Date().toISOString() });
+          }
+        });
 
-    this.subscriptions.set(contactId, channel);
-    return channel;
+      this.subscriptions.set(contactId, channel);
+      return channel;
+    } catch (error) {
+      console.error('Error subscribing to contact:', error);
+      this.emit('error', {
+        type: 'error',
+        payload: { contactId, error: error instanceof Error ? error.message : 'Subscription failed' },
+        timestamp: new Date().toISOString()
+      });
+      return null;
+    }
   }
 
   // Unsubscribe from a contact's real-time updates
-  unsubscribeFromContact(contactId: string) {
+  unsubscribeFromContact(contactId: string): void {
     const channel = this.subscriptions.get(contactId);
     if (channel) {
-      supabase.removeChannel(channel);
+      try {
+        supabase.removeChannel(channel);
+      } catch (error) {
+        console.error('Error removing channel:', error);
+      }
       this.subscriptions.delete(contactId);
     }
 
@@ -68,9 +88,13 @@ export class RealtimeCRMService {
   }
 
   // Unsubscribe from all real-time updates
-  unsubscribeAll() {
+  unsubscribeAll(): void {
     this.subscriptions.forEach((channel, contactId) => {
-      supabase.removeChannel(channel);
+      try {
+        supabase.removeChannel(channel);
+      } catch (error) {
+        console.error(`Error removing channel for ${contactId}:`, error);
+      }
     });
     this.subscriptions.clear();
     
@@ -79,7 +103,9 @@ export class RealtimeCRMService {
   }
 
   // Send typing indicator
-  async sendTypingIndicator(contactId: string, isTyping: boolean, channel: 'email' | 'whatsapp') {
+  async sendTypingIndicator(contactId: string, isTyping: boolean, channel: 'email' | 'whatsapp'): Promise<void> {
+    if (this.isDestroyed) return;
+
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -100,32 +126,46 @@ export class RealtimeCRMService {
 
       if (error) {
         console.error('Error sending typing indicator:', error);
+        this.emit('error', {
+          type: 'error',
+          payload: { contactId, error: error.message },
+          timestamp: new Date().toISOString()
+        });
         return;
       }
 
       // If typing, set a timeout to stop typing after 3 seconds
       if (isTyping) {
         const timeout = setTimeout(() => {
-          this.sendTypingIndicator(contactId, false, channel);
+          if (!this.isDestroyed) {
+            this.sendTypingIndicator(contactId, false, channel);
+          }
         }, 3000);
         this.typingTimeouts.set(contactId, timeout);
       }
 
-      this.emit('typing_sent', { 
-        type: 'typing', 
-        payload: { contactId, isTyping, channel }, 
-        timestamp: new Date().toISOString() 
+      this.emit('typing', {
+        type: 'typing',
+        payload: { contactId, isTyping, channel },
+        timestamp: new Date().toISOString()
       });
 
     } catch (error) {
       console.error('Error in sendTypingIndicator:', error);
+      this.emit('error', {
+        type: 'error',
+        payload: { contactId, error: error instanceof Error ? error.message : 'Unknown error' },
+        timestamp: new Date().toISOString()
+      });
     }
   }
 
   // Update message delivery status
-  async updateMessageStatus(messageId: string, status: MessageDeliveryStatus) {
+  async updateMessageStatus(messageId: string, status: MessageDeliveryStatus): Promise<void> {
+    if (this.isDestroyed) return;
+
     try {
-      const updateData: any = {
+      const updateData: Record<string, any> = {
         delivery_status: status
       };
 
@@ -143,10 +183,15 @@ export class RealtimeCRMService {
 
       if (error) {
         console.error('Error updating message status:', error);
+        this.emit('error', {
+          type: 'error',
+          payload: { messageId, error: error.message },
+          timestamp: new Date().toISOString()
+        });
         return;
       }
 
-      this.emit('status_updated', {
+      this.emit('delivery_status', {
         type: 'delivery_status',
         payload: { messageId, status },
         timestamp: new Date().toISOString()
@@ -154,6 +199,11 @@ export class RealtimeCRMService {
 
     } catch (error) {
       console.error('Error in updateMessageStatus:', error);
+      this.emit('error', {
+        type: 'error',
+        payload: { messageId, error: error instanceof Error ? error.message : 'Unknown error' },
+        timestamp: new Date().toISOString()
+      });
     }
   }
 
@@ -306,17 +356,19 @@ export class RealtimeCRMService {
   }
 
   // Handle real-time message changes
-  private handleMessageChange(payload: any) {
+  private handleMessageChange(payload: any): void {
+    if (this.isDestroyed) return;
+    
     console.log('Message change:', payload);
     
     if (payload.eventType === 'INSERT') {
-      this.emit('new_message', {
+      this.emit('message', {
         type: 'message',
         payload: payload.new,
         timestamp: new Date().toISOString()
       });
     } else if (payload.eventType === 'UPDATE') {
-      this.emit('message_updated', {
+      this.emit('delivery_status', {
         type: 'delivery_status',
         payload: payload.new,
         timestamp: new Date().toISOString()
@@ -325,11 +377,13 @@ export class RealtimeCRMService {
   }
 
   // Handle typing indicator changes
-  private handleTypingIndicator(payload: any) {
+  private handleTypingIndicator(payload: any): void {
+    if (this.isDestroyed) return;
+    
     console.log('Typing indicator:', payload);
     
     if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
-      this.emit('typing_indicator', {
+      this.emit('typing', {
         type: 'typing',
         payload: payload.new,
         timestamp: new Date().toISOString()
@@ -363,22 +417,27 @@ export class RealtimeCRMService {
   }
 
   // Network status monitoring
-  private setupNetworkListeners() {
-    window.addEventListener('online', () => {
+  private setupNetworkListeners(): void {
+    const handleOnline = () => {
+      if (this.isDestroyed) return;
       console.log('Network restored');
-      this.emit('online', { type: 'connection', payload: { isOnline: true }, timestamp: new Date().toISOString() });
+      this.emit('connection', { type: 'connection', payload: { isOnline: true }, timestamp: new Date().toISOString() });
       
       // Sync all cached contacts when coming back online
       const contacts = messageCache.getAllCachedContacts();
       contacts.forEach(contactId => {
         this.backgroundSync(contactId);
       });
-    });
+    };
 
-    window.addEventListener('offline', () => {
+    const handleOffline = () => {
+      if (this.isDestroyed) return;
       console.log('Network lost');
-      this.emit('offline', { type: 'connection', payload: { isOnline: false }, timestamp: new Date().toISOString() });
-    });
+      this.emit('connection', { type: 'connection', payload: { isOnline: false }, timestamp: new Date().toISOString() });
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
   }
 
   // Get connection status
@@ -387,6 +446,13 @@ export class RealtimeCRMService {
       connected: this.subscriptions.size > 0,
       subscriptions: Array.from(this.subscriptions.keys())
     };
+  }
+
+  // Cleanup method
+  destroy(): void {
+    this.isDestroyed = true;
+    this.unsubscribeAll();
+    this.eventHandlers.clear();
   }
 }
 

@@ -129,7 +129,7 @@ export interface PendingMessage {
 }
 
 export interface RealtimeEvent {
-  type: 'message' | 'typing' | 'delivery_status' | 'read_receipt';
+  type: 'message' | 'typing' | 'delivery_status' | 'read_receipt' | 'error' | 'connection';
   payload: any;
   timestamp: string;
 }
@@ -139,6 +139,7 @@ export interface MessageSyncStatus {
   pending_count: number;
   failed_count: number;
   is_online: boolean;
+  updated_at?: string;
 }
 
 export interface Profile {
@@ -196,6 +197,14 @@ export interface Session {
   session_date: string;
   start_time: string;
   meeting_link?: string;
+  // Zoom integration fields
+  zoom_meeting_id?: string;
+  zoom_join_url?: string;
+  zoom_start_url?: string;
+  zoom_password?: string;
+  zoom_created_at?: string;
+  zoom_created_by?: 'manual' | 'webhook' | 'cron' | 'system';
+  zoom_metadata?: any;
   status: 'upcoming' | 'ongoing' | 'completed';
   created_by?: string;
   created_at: string;

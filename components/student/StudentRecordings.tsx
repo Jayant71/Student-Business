@@ -1,9 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Video, Search, Play, Clock, RefreshCw } from 'lucide-react';
-import { recordingService, RecordingWithSession } from '../../src/services/recording-service';
+import { recordingService } from '../../src/services/recording-service';
+import { recordingViewService } from '../../src/services';
+import { useAuth } from '../../src/context/AuthContext';
 import { useToast } from '../../src/context/ToastContext';
+import { RecordingWithSession } from '../../types';
 
 export const StudentRecordings: React.FC = () => {
+    const { user } = useAuth();
     const toast = useToast();
     const [recordings, setRecordings] = useState<RecordingWithSession[]>([]);
     const [activeFilter, setActiveFilter] = useState('All');
@@ -30,7 +34,9 @@ export const StudentRecordings: React.FC = () => {
             const result = await recordingService.list({ includeHidden: false, limit: 60 });
             setRecordings(result);
         } catch (err: any) {
-            toast.showError('Failed to load recordings', err.message || 'Unexpected error');
+            const errorMessage = err?.message || err?.error || 'Failed to load recordings';
+            toast.showError('Failed to load recordings', errorMessage);
+            console.error('Failed to load recordings:', err);
         } finally {
             setLoading(false);
         }
@@ -58,6 +64,25 @@ export const StudentRecordings: React.FC = () => {
             day: 'numeric',
             year: 'numeric'
         });
+    };
+
+    const handleRecordingClick = async (recording: RecordingWithSession) => {
+        // Log the view
+        if (user?.id) {
+            try {
+                await recordingViewService.logView(recording.id, user.id);
+            } catch (err) {
+                console.error('Failed to log recording view:', err);
+                // Don't block the user from viewing the recording
+            }
+        }
+
+        // Open the recording in a new tab
+        if (recording.video_url) {
+            window.open(recording.video_url, '_blank');
+        } else {
+            toast.showError('Recording not available', 'This recording does not have a video URL');
+        }
     };
 
     return (
@@ -97,8 +122,8 @@ export const StudentRecordings: React.FC = () => {
                         key={filter}
                         onClick={() => setActiveFilter(filter)}
                         className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors whitespace-nowrap ${activeFilter === filter
-                                ? 'bg-dark text-white shadow-lg'
-                                : 'bg-white text-gray-600 hover:bg-gray-50 border border-gray-200'
+                            ? 'bg-dark text-white shadow-lg'
+                            : 'bg-white text-gray-600 hover:bg-gray-50 border border-gray-200'
                             }`}
                     >
                         {filter}
@@ -118,7 +143,7 @@ export const StudentRecordings: React.FC = () => {
                         <div key={recording.id} className="bg-white rounded-2xl overflow-hidden shadow-sm border border-gray-200 group hover:-translate-y-1 transition-transform duration-300">
                             <button
                                 className="relative aspect-video bg-gray-900 group-hover:brightness-90 transition-all w-full"
-                                onClick={() => window.open(recording.video_url, '_blank')}
+                                onClick={() => handleRecordingClick(recording)}
                             >
                                 <div className="absolute inset-0 flex items-center justify-center">
                                     <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">

@@ -44,6 +44,7 @@ export const StudentLayout: React.FC<StudentLayoutProps> = ({ user, profile, onS
     upcomingSession: studentData.upcomingSession,
     pendingAssignments: studentData.pendingAssignments,
     recentRecordings: studentData.recentRecordings,
+    progress: studentData.progress,
     loading: studentData.loading,
     error: studentData.error,
     retryFetch: studentData.retryFetch,
@@ -51,7 +52,7 @@ export const StudentLayout: React.FC<StudentLayoutProps> = ({ user, profile, onS
     canRetry: studentData.canRetry,
     paymentStats: studentPayments.stats,
     paymentsLoading: studentPayments.loading
-  }), [resolvedProfile, studentData.upcomingSession, studentData.pendingAssignments, studentData.recentRecordings, studentData.loading, studentData.error, studentData.retryFetch, studentData.hasError, studentData.canRetry, studentPayments.stats, studentPayments.loading]);
+  }), [resolvedProfile, studentData.upcomingSession, studentData.pendingAssignments, studentData.recentRecordings, studentData.progress, studentData.loading, studentData.error, studentData.retryFetch, studentData.hasError, studentData.canRetry, studentPayments.stats, studentPayments.loading]);
 
   const handleSignOut = async () => {
     try {

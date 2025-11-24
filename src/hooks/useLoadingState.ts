@@ -28,7 +28,7 @@ export const useLoadingState = (initialMessage?: string): LoadingState & Loading
     }
   }, []);
 
-  const withLoading = useCallback(async <T,>(
+  const withLoading = useCallback(async <T>(
     operation: () => Promise<T>,
     message?: string
   ): Promise<T> => {
@@ -83,28 +83,38 @@ export const useLoadingGroup = (keys: string[]): LoadingGroup & LoadingGroupActi
   });
 
   const setLoading = useCallback((key: string, loading: boolean, message?: string) => {
-    setLoadingStates(prev => ({
-      ...prev,
-      [key]: {
-        ...prev[key],
-        isLoading: loading,
-        loadingMessage: loading ? message : prev[key].loadingMessage,
-        progress: loading ? prev[key].progress : undefined
-      }
-    }));
+    setLoadingStates(prev => {
+      const currentState = prev[key];
+      if (!currentState) return prev;
+      
+      return {
+        ...prev,
+        [key]: {
+          ...currentState,
+          isLoading: loading,
+          loadingMessage: loading ? message : currentState.loadingMessage,
+          progress: loading ? currentState.progress : undefined
+        }
+      };
+    });
   }, []);
 
   const setProgress = useCallback((key: string, progress: number) => {
-    setLoadingStates(prev => ({
-      ...prev,
-      [key]: {
-        ...prev[key],
-        progress
-      }
-    }));
+    setLoadingStates(prev => {
+      const currentState = prev[key];
+      if (!currentState) return prev;
+      
+      return {
+        ...prev,
+        [key]: {
+          ...currentState,
+          progress
+        }
+      };
+    });
   }, []);
 
-  const withLoading = useCallback(async <T,>(
+  const withLoading = useCallback(async <T>(
     key: string,
     operation: () => Promise<T>,
     message?: string
@@ -119,21 +129,30 @@ export const useLoadingGroup = (keys: string[]): LoadingGroup & LoadingGroupActi
   }, [setLoading]);
 
   const isAnyLoading = useCallback(() => {
-    return Object.values(loadingStates).some(state => state.isLoading);
+    return Object.values(loadingStates).some(state =>
+      state && typeof state === 'object' && 'isLoading' in state && state.isLoading
+    );
   }, [loadingStates]);
 
   const getLoadingKeys = useCallback(() => {
     return Object.entries(loadingStates)
-      .filter(([_, state]) => state.isLoading)
+      .filter(([_, state]) =>
+        state && typeof state === 'object' && 'isLoading' in state && state.isLoading
+      )
       .map(([key]) => key);
   }, [loadingStates]);
 
   const reset = useCallback((key?: string) => {
     if (key) {
-      setLoadingStates(prev => ({
-        ...prev,
-        [key]: { isLoading: false, loadingMessage: undefined, progress: undefined }
-      }));
+      setLoadingStates(prev => {
+        const currentState = prev[key];
+        if (!currentState) return prev;
+        
+        return {
+          ...prev,
+          [key]: { isLoading: false, loadingMessage: undefined, progress: undefined }
+        };
+      });
     }
   }, []);
 
@@ -170,7 +189,7 @@ export const useLoadingWithTimeout = (
     setHasTimedOut(false);
   }, [loadingState]);
 
-  const withLoading = useCallback(async <T,>(
+  const withLoading = useCallback(async <T>(
     operation: () => Promise<T>,
     message?: string
   ): Promise<T> => {
@@ -192,7 +211,9 @@ export const useLoadingWithTimeout = (
       clearTimeout(timeoutId);
       throw error;
     } finally {
-      clearTimeout(timeoutId);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
       setLoading(false);
     }
   }, [setLoading, timeoutMs]);
@@ -210,20 +231,26 @@ export const useLoadingWithTimeout = (
 };
 
 // Hook for managing sequential loading states
+export interface SequentialLoadingActions {
+  executeSequentially: <T>(operations: Array<() => Promise<T>>) => Promise<T[]>;
+}
+
 export const useSequentialLoading = (
   steps: Array<{ key: string; message?: string }>
-): LoadingState & LoadingActions & { currentStep: number; completedSteps: string[] } => {
+): LoadingState & LoadingActions & SequentialLoadingActions & { currentStep: number; completedSteps: string[] } => {
   const [currentStep, setCurrentStep] = useState(0);
   const [completedSteps, setCompletedSteps] = useState<string[]>([]);
   const loadingState = useLoadingState();
 
-  const executeSequentially = useCallback(async <T,>(
+  const executeSequentially = useCallback(async <T>(
     operations: Array<() => Promise<T>>
   ): Promise<T[]> => {
     const results: T[] = [];
     
     for (let i = 0; i < operations.length; i++) {
       const step = steps[i];
+      if (!step) continue;
+      
       setCurrentStep(i);
       loadingState.setLoading(true, step.message);
       
@@ -233,6 +260,7 @@ export const useSequentialLoading = (
         setCompletedSteps(prev => [...prev, step.key]);
       } catch (error) {
         loadingState.setLoading(false);
+        setCurrentStep(0);
         throw error;
       }
     }
@@ -281,7 +309,7 @@ export const useDebouncedLoading = (
     } else {
       loadingState.setLoading(false);
     }
-  }, [loadingState, delayMs, timeoutId]);
+  }, [loadingState, delayMs]);
 
   const reset = useCallback(() => {
     if (timeoutId) {
@@ -289,7 +317,7 @@ export const useDebouncedLoading = (
       setTimeoutId(null);
     }
     loadingState.reset();
-  }, [loadingState, timeoutId]);
+  }, [loadingState]);
 
   return {
     ...loadingState,

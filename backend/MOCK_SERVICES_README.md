@@ -5,12 +5,15 @@ This document explains the mock services implementation for external integration
 ## Overview
 
 The mock services simulate the following external integrations:
+
 - **SendGrid** - Email service
 - **AiSensy** - WhatsApp messaging
 - **Instamojo** - Payment processing
 - **Bolna.ai** - Voice calling
+- **Zoom** - Video conferencing and recordings
 
-All mock services log their actions to Supabase for visibility and testing purposes.
+Mock services for SendGrid, AiSensy, Instamojo, and Bolna log their actions to Supabase for visibility and testing purposes.
+The Zoom mock service stores data in-memory for fast testing without database dependencies.
 
 ## Configuration
 
@@ -22,6 +25,9 @@ Add the following to your `.env` file:
 # Enable mock mode for development/testing
 MOCK_MODE=true
 
+# Enable mock Zoom (no credentials needed)
+USE_MOCK_ZOOM=true
+
 # Supabase configuration (required for logging)
 SUPABASE_URL=your_supabase_url
 SUPABASE_SERVICE_KEY=your_supabase_service_key
@@ -32,6 +38,11 @@ AISENSY_API_KEY=your_aisensy_api_key
 BOLNA_API_KEY=your_bolna_api_key
 INSTAMOJO_API_KEY=your_instamojo_api_key
 INSTAMOJO_AUTH_TOKEN=your_instamojo_auth_token
+
+# Zoom API keys (not required when USE_MOCK_ZOOM=true)
+ZOOM_ACCOUNT_ID=your_zoom_account_id
+ZOOM_CLIENT_ID=your_zoom_client_id
+ZOOM_CLIENT_SECRET=your_zoom_client_secret
 ```
 
 ### How It Works
@@ -42,6 +53,7 @@ When `MOCK_MODE=true`, the Flask application automatically uses mock services in
 2. **WhatsApp Service**: Simulates messages and logs to `whatsapp_logs` and `crm_messages` tables
 3. **Payment Service**: Creates mock payment links and logs to `payments` table
 4. **Voice Service**: Simulates calls and logs to `call_logs` table
+5. **Zoom Service** (USE_MOCK_ZOOM=true): Stores meetings in-memory, simulates recording generation
 
 ## Mock Services Features
 
@@ -90,6 +102,21 @@ When `MOCK_MODE=true`, the Flask application automatically uses mock services in
 **Response Times**: 0.5-1.3 seconds
 **Success Rate**: 90%
 
+### Zoom Service (`MockZoomService`)
+
+- **Meeting Management**: `create_meeting()`, `update_meeting()`, `delete_meeting()`
+- **Meeting Details**: `get_meeting()`, `list_meetings()`
+- **Recordings**: `get_meeting_recordings()`
+- **Testing Utilities**: `simulate_meeting_end()`, `clear_all_meetings()`
+- **Status Tracking**: Auto-updates meeting status (waiting → started → ended)
+- **Recording Generation**: Auto-creates 3 recording types (MP4, M4A, CHAT) after meeting ends
+
+**Storage**: In-memory (no database required)
+**Response Times**: Instant (no network latency)
+**Success Rate**: 100%
+
+See `services/MOCK_ZOOM_README.md` for detailed documentation.
+
 ## Database Tables Used
 
 The mock services log to the following Supabase tables:
@@ -107,17 +134,20 @@ The mock services log to the following Supabase tables:
 All existing API endpoints work seamlessly with mock services when `MOCK_MODE=true`:
 
 ### Email Endpoints
+
 - `POST /api/automation/trigger/email` - Send single email
 - `POST /api/automation/trigger/email/batch` - Send bulk emails
 - `GET /api/automation/email/stats` - Get email statistics
 
 ### WhatsApp Endpoints
+
 - `POST /api/automation/trigger/whatsapp` - Send single message
 - `POST /api/automation/trigger/whatsapp/bulk` - Send bulk messages
 - `POST /api/automation/whatsapp/campaigns` - Create campaign
 - `GET /api/automation/whatsapp/stats` - Get WhatsApp statistics
 
 ### Payment Endpoints
+
 - `POST /api/admin/payment-links` - Create payment link
 - `GET /api/admin/payment-links` - List payment links
 - `POST /api/admin/payment-links/<id>/resend` - Resend payment link
@@ -125,6 +155,7 @@ All existing API endpoints work seamlessly with mock services when `MOCK_MODE=tr
 - `POST /api/webhooks/payment/webhook` - Process payment webhook
 
 ### Voice Endpoints
+
 - `POST /api/automation/trigger/call` - Make single call
 - `POST /api/automation/trigger/call/bulk` - Make bulk calls
 - `POST /api/automation/call/campaigns` - Create voice campaign
@@ -133,6 +164,7 @@ All existing API endpoints work seamlessly with mock services when `MOCK_MODE=tr
 - `GET /api/automation/call/stats` - Get call statistics
 
 ### Settings Endpoints
+
 - `GET /api/admin/settings/mock-mode` - Get mock mode status
 - `POST /api/admin/settings/mock-mode` - Update mock mode setting
 
@@ -156,6 +188,7 @@ python test_mock_services.py
 ```
 
 This will test:
+
 - All mock service functionality
 - Database logging
 - Response time simulation
@@ -172,18 +205,21 @@ This will test:
 ## Benefits
 
 ### Development Benefits
+
 - **No API Keys Required**: Start development without external service setup
 - **Cost Effective**: No charges from external services during development
 - **Offline Development**: Work without internet connectivity
 - **Fast Iteration**: No rate limits or external dependencies
 
 ### Testing Benefits
+
 - **Predictable Behavior**: Consistent responses for testing
 - **Failure Simulation**: Test error handling scenarios
 - **Data Visibility**: All activities logged for inspection
 - **Performance Testing**: Realistic response time simulation
 
 ### Production Benefits
+
 - **Easy Switching**: Toggle between mock and real services
 - **Fallback Option**: Use mock services as backup during outages
 - **Demo Ready**: Perfect for product demonstrations
@@ -208,11 +244,13 @@ This will test:
 ### Common Issues
 
 1. **Mock Mode Not Working**
+
    - Ensure `MOCK_MODE=true` is set in environment
    - Restart the Flask server after changing the setting
    - Check the server logs for "[MOCK MODE]" messages
 
 2. **Database Logging Issues**
+
    - Verify Supabase credentials are correct
    - Check if required tables exist in Supabase
    - Ensure proper database permissions
@@ -225,6 +263,7 @@ This will test:
 ### Debug Mode
 
 Enable debug logging by setting:
+
 ```bash
 FLASK_ENV=development
 FLASK_DEBUG=1

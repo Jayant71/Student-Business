@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { Session, User } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { useToast } from './ToastContext';
@@ -26,21 +26,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [loading, setLoading] = useState(true);
     const [authError, setAuthError] = useState<string | null>(null);
     const [retryCount, setRetryCount] = useState(0);
-    
-    const toast = useToast();
 
-    const logError = useCallback(async (error: Error, context: string) => {
-        await errorLogger.logErrorAuto(error, {
-            type: 'api-error',
-            severity: 'high',
-            context: {
-                component: 'AuthContext',
-                operation: context,
-                userId: user?.id,
-                retryCount
-            }
-        });
-    }, [user?.id, retryCount]);
+    const toast = useToast();
+    const retryCountRef = useRef(retryCount);
+
+    // Keep ref in sync with state
+    useEffect(() => {
+        retryCountRef.current = retryCount;
+    }, [retryCount]);
 
     const fetchProfile = useCallback(async (userId: string, isRetry: boolean = false) => {
         try {
@@ -53,10 +46,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (error) {
                 throw error;
             }
-            
+
             setProfile(data);
             setAuthError(null);
-            
+
             if (isRetry) {
                 toast.showSuccess('Profile loaded successfully');
             }
@@ -64,16 +57,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             console.error('Error fetching profile:', error);
             const errorMessage = error instanceof Error ? error.message : 'Failed to fetch profile';
             setAuthError(errorMessage);
-            
-            await logError(error as Error, 'fetchProfile');
-            
+
+            // Log error without awaiting to avoid blocking
+            errorLogger.logErrorAuto(error as Error, {
+                type: 'api-error',
+                severity: 'high',
+                context: {
+                    component: 'AuthContext',
+                    operation: 'fetchProfile',
+                    userId: userId,
+                    retryCount: retryCountRef.current
+                }
+            }).catch(console.error);
+
             if (!isRetry) {
                 toast.showError('Profile loading failed', errorMessage);
             }
         } finally {
             setLoading(false);
         }
-    }, [toast, logError]);
+    }, [toast]); // Remove retryCount from dependencies
 
     const retryFetchProfile = useCallback(async () => {
         if (user) {
@@ -84,18 +87,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }, [user, fetchProfile]);
 
     useEffect(() => {
+        let mounted = true;
+
         // Get initial session
         const initializeAuth = async () => {
             try {
                 const { data: { session }, error } = await supabase.auth.getSession();
-                
+
                 if (error) {
                     throw error;
                 }
-                
+
+                if (!mounted) return;
+
                 setSession(session);
                 setUser(session?.user ?? null);
-                
+
                 if (session?.user) {
                     await fetchProfile(session.user.id);
                 } else {
@@ -104,9 +111,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             } catch (error) {
                 console.error('Error initializing auth:', error);
                 const errorMessage = error instanceof Error ? error.message : 'Failed to initialize authentication';
+
+                if (!mounted) return;
+
                 setAuthError(errorMessage);
-                
-                await logError(error as Error, 'initializeAuth');
+
+                // Log error without awaiting
+                errorLogger.logErrorAuto(error as Error, {
+                    type: 'api-error',
+                    severity: 'high',
+                    context: {
+                        component: 'AuthContext',
+                        operation: 'initializeAuth',
+                        retryCount: retryCountRef.current
+                    }
+                }).catch(console.error);
+
                 toast.showError('Authentication failed', errorMessage);
                 setLoading(false);
             }
@@ -116,9 +136,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         // Listen for auth changes
         const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+            if (!mounted) return;
+
             setSession(session);
             setUser(session?.user ?? null);
-            
+
             if (session?.user) {
                 await fetchProfile(session.user.id);
             } else {
@@ -128,8 +150,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
         });
 
-        return () => subscription.unsubscribe();
-    }, [fetchProfile, logError, toast]);
+        return () => {
+            mounted = false;
+            subscription.unsubscribe();
+        };
+    }, []); // Empty dependency array - only run once on mount
 
     const signOut = async () => {
         try {
@@ -139,7 +164,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             console.error('Error signing out:', error);
             const errorMessage = error instanceof Error ? error.message : 'Failed to sign out';
             toast.showError('Sign out failed', errorMessage);
-            await logError(error as Error, 'signOut');
+
+            // Log error without awaiting
+            errorLogger.logErrorAuto(error as Error, {
+                type: 'api-error',
+                severity: 'medium',
+                context: {
+                    component: 'AuthContext',
+                    operation: 'signOut'
+                }
+            }).catch(console.error);
         }
     };
 

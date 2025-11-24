@@ -35,3 +35,29 @@ class WhatsAppService:
         except Exception as e:
             print(f"Error sending WhatsApp: {e}")
             return False
+
+
+# Global singleton instance
+_whatsapp_service_instance = None
+
+def get_whatsapp_service():
+    """
+    Get global WhatsAppService instance (singleton pattern).
+    Uses mock service if MOCK_MODE is enabled.
+    
+    Returns:
+        WhatsAppService or MockWhatsAppService: WhatsApp service instance
+    """
+    global _whatsapp_service_instance
+    
+    if _whatsapp_service_instance is None:
+        # Check if mock mode is enabled
+        if Config.MOCK_MODE:
+            from services.mock_whatsapp_service import MockWhatsAppService
+            print("[WhatsApp Service] Using MOCK WhatsApp service (no real API calls)")
+            _whatsapp_service_instance = MockWhatsAppService()
+        else:
+            print("[WhatsApp Service] Using REAL AiSensy API")
+            _whatsapp_service_instance = WhatsAppService()
+    
+    return _whatsapp_service_instance

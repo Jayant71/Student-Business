@@ -87,6 +87,15 @@ export const StudentSchedule: React.FC = () => {
     return now >= thirtyMinutesBefore && now < sessionDateTime;
   };
 
+  const getSessionJoinUrl = (session: Session) => {
+    // Prioritize zoom_join_url if available, fallback to meeting_link
+    return session.zoom_join_url || session.meeting_link;
+  };
+
+  const isZoomMeeting = (session: Session) => {
+    return !!(session.zoom_join_url || session.zoom_meeting_id);
+  };
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-dark flex items-center gap-2">
@@ -94,24 +103,46 @@ export const StudentSchedule: React.FC = () => {
       </h1>
 
       {nextSession && (
-        <div className="bg-white rounded-3xl p-8 text-center border border-gray-200 shadow-sm mb-8">
-          <p className="text-gray-500 mb-2 font-medium">Next Session Starts In</p>
+        <div className="bg-gradient-to-br from-primary/5 to-secondary/5 rounded-3xl p-8 text-center border border-primary/20 shadow-lg mb-8">
+          <p className="text-gray-600 mb-2 font-medium">Next Session Starts In</p>
           <CountdownTimer targetDate={`${nextSession.session_date}T${nextSession.start_time}`} />
-          {nextSession.meeting_link ? (
-            <Button
-              variant="primary"
-              className="gap-2 shadow-xl shadow-primary/20 animate-pulse"
-              onClick={() => window.open(nextSession.meeting_link, '_blank')}
-              disabled={!isSessionJoinable(nextSession)}
-            >
-              <Video size={18} /> Join {nextSession.meeting_link?.includes('zoom') ? 'Zoom' : 'Class'} Room
-            </Button>
+
+          {getSessionJoinUrl(nextSession) ? (
+            <div className="space-y-3">
+              <Button
+                variant="primary"
+                className="gap-2 shadow-xl shadow-primary/20 hover:scale-105 transition-transform"
+                onClick={() => window.open(getSessionJoinUrl(nextSession), '_blank')}
+                disabled={!isSessionJoinable(nextSession)}
+              >
+                <Video size={18} />
+                {isSessionJoinable(nextSession)
+                  ? `Join ${isZoomMeeting(nextSession) ? 'Zoom' : 'Class'} Meeting`
+                  : `Join Opens in ${Math.ceil((new Date(`${nextSession.session_date}T${nextSession.start_time}`).getTime() - new Date().getTime()) / 60000)} mins`
+                }
+              </Button>
+
+              {isZoomMeeting(nextSession) && isSessionJoinable(nextSession) && (
+                <p className="text-xs text-gray-500">
+                  ✓ Zoom meeting is ready • {nextSession.zoom_password && `Password: ${nextSession.zoom_password}`}
+                </p>
+              )}
+            </div>
           ) : (
-            <Button variant="outline" disabled>
-              <Video size={18} /> No Link Available
-            </Button>
+            <div className="space-y-2">
+              <Button variant="outline" disabled className="gap-2">
+                <AlertCircle size={18} /> Meeting Link Not Available
+              </Button>
+              <p className="text-xs text-gray-500">Meeting will be created soon</p>
+            </div>
           )}
-          <p className="text-xs text-gray-400 mt-3">Link becomes active 10 mins before class.</p>
+
+          <p className="text-xs text-gray-400 mt-4">
+            {isSessionJoinable(nextSession)
+              ? '✓ You can join the meeting now'
+              : 'Link becomes active 10 mins before class'
+            }
+          </p>
         </div>
       )}
 
@@ -153,30 +184,38 @@ export const StudentSchedule: React.FC = () => {
                       <Clock size={14} className="text-primary" /> {startTime} - {endTimeFormatted}
                     </span>
                     <span className="flex items-center gap-1 bg-gray-50 px-2 py-1 rounded">
-                      <Video size={14} className="text-secondary" /> {session.meeting_link?.includes('zoom') ? 'Zoom Meeting' : 'Online Class'}
+                      <Video size={14} className={isZoomMeeting(session) ? "text-blue-500" : "text-secondary"} />
+                      {isZoomMeeting(session) ? 'Zoom Meeting' : 'Online Class'}
                     </span>
+                    {isSessionSoon(session) && (
+                      <span className="flex items-center gap-1 bg-accent/20 px-2 py-1 rounded animate-pulse">
+                        <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                        Starting Soon
+                      </span>
+                    )}
                   </div>
                 </div>
 
                 <div className="w-full md:w-auto">
-                  {session.meeting_link ? (
+                  {getSessionJoinUrl(session) ? (
                     isSessionJoinable(session) ? (
                       <Button
                         variant="primary"
                         size="sm"
                         fullWidth
-                        onClick={() => window.open(session.meeting_link, '_blank')}
+                        className="gap-2 hover:scale-105 transition-transform"
+                        onClick={() => window.open(getSessionJoinUrl(session), '_blank')}
                       >
-                        Join Class
+                        <Video size={16} /> Join {isZoomMeeting(session) ? 'Zoom' : 'Class'}
                       </Button>
                     ) : (
                       <Button variant="outline" size="sm" fullWidth disabled className="opacity-50 cursor-not-allowed">
-                        Starts Later
+                        <Clock size={16} /> Starts Later
                       </Button>
                     )
                   ) : (
                     <Button variant="outline" size="sm" fullWidth disabled className="opacity-50 cursor-not-allowed">
-                      No Link
+                      <AlertCircle size={16} /> No Link Yet
                     </Button>
                   )}
                 </div>

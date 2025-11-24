@@ -8,7 +8,7 @@ import { StudentPaymentStats } from '@/src/hooks/useStudentPayments';
 
 interface StudentDashboardProps {
     onChangeView: (view: StudentView) => void;
-    data: Pick<StudentDataState, 'profile' | 'upcomingSession' | 'pendingAssignments' | 'recentRecordings' | 'loading' | 'error' | 'retryFetch' | 'hasError' | 'canRetry'> & {
+    data: Pick<StudentDataState, 'profile' | 'upcomingSession' | 'pendingAssignments' | 'recentRecordings' | 'progress' | 'loading' | 'error' | 'retryFetch' | 'hasError' | 'canRetry'> & {
         paymentStats: StudentPaymentStats;
         paymentsLoading: boolean;
     };
@@ -16,8 +16,14 @@ interface StudentDashboardProps {
 }
 
 export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onChangeView, data, fallbackEmail }) => {
-    const { profile, upcomingSession, pendingAssignments, recentRecordings, loading, error, retryFetch, hasError, canRetry, paymentStats, paymentsLoading } = data;
+    const { profile, upcomingSession, pendingAssignments, recentRecordings, progress, loading, error, retryFetch, hasError, canRetry, paymentStats, paymentsLoading } = data;
     const displayName = profile?.name || fallbackEmail?.split('@')[0] || 'Student';
+
+    // Calculate progress values
+    const progressPercentage = progress?.progress_percentage || 0;
+    const completedModules = progress?.completed_assignments || 0;
+    const totalModules = progress?.total_assignments || 10; // Fallback to 10 if no data
+    const strokeDashoffset = 351.86 - (351.86 * progressPercentage) / 100;
 
     const formatCurrency = (value: number = 0) =>
         value.toLocaleString('en-US', {
@@ -82,12 +88,15 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onChangeView
                     <div className="space-y-2">
                         <div className="flex justify-between text-sm font-bold text-gray-600">
                             <span>Course Progress</span>
-                            <span className="text-primary">40%</span>
+                            <span className="text-primary">{Math.round(progressPercentage)}%</span>
                         </div>
                         <div className="w-full h-3 bg-gray-100 rounded-full overflow-hidden">
-                            <div className="h-full bg-gradient-to-r from-primary to-secondary w-[40%] rounded-full"></div>
+                            <div
+                                className="h-full bg-gradient-to-r from-primary to-secondary rounded-full transition-all duration-500"
+                                style={{ width: `${progressPercentage}%` }}
+                            ></div>
                         </div>
-                        <p className="text-xs text-gray-400 mt-1">4 of 10 modules completed</p>
+                        <p className="text-xs text-gray-400 mt-1">{completedModules} of {totalModules} modules completed</p>
                         <div className="grid grid-cols-2 gap-3 mt-4 text-xs">
                             <div className="bg-gray-50 rounded-xl px-3 py-2 border border-gray-100">
                                 <p className="text-gray-500 mb-1">Paid so far</p>
@@ -104,10 +113,21 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onChangeView
                     <div className="relative w-32 h-32 flex items-center justify-center">
                         <svg className="w-full h-full transform -rotate-90">
                             <circle cx="64" cy="64" r="56" stroke="currentColor" strokeWidth="8" fill="transparent" className="text-gray-100" />
-                            <circle cx="64" cy="64" r="56" stroke="currentColor" strokeWidth="8" fill="transparent" strokeDasharray="351.86" strokeDashoffset="211" className="text-accent" strokeLinecap="round" />
+                            <circle
+                                cx="64"
+                                cy="64"
+                                r="56"
+                                stroke="currentColor"
+                                strokeWidth="8"
+                                fill="transparent"
+                                strokeDasharray="351.86"
+                                strokeDashoffset={strokeDashoffset}
+                                className="text-accent transition-all duration-500"
+                                strokeLinecap="round"
+                            />
                         </svg>
                         <div className="absolute flex flex-col items-center">
-                            <span className="text-2xl font-bold text-dark">40%</span>
+                            <span className="text-2xl font-bold text-dark">{Math.round(progressPercentage)}%</span>
                         </div>
                     </div>
                 </div>

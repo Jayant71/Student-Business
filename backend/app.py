@@ -1,6 +1,7 @@
 from flask import Flask, jsonify
 from flask_cors import CORS
 from config import Config
+import atexit
 
 def create_app():
     app = Flask(__name__)
@@ -8,6 +9,13 @@ def create_app():
     
     # Enable CORS
     CORS(app)
+    
+    # Initialize background job scheduler
+    from jobs.scheduler import init_scheduler, shutdown_scheduler
+    scheduler = init_scheduler(app)
+    
+    # Shutdown scheduler when app closes
+    atexit.register(lambda: shutdown_scheduler())
     
     # Health Check Endpoint
     @app.route('/health', methods=['GET'])

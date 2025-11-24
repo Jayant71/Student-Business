@@ -7,13 +7,37 @@ import { DashboardSkeleton } from '@/src/components/ui/LoadingSkeleton';
 import { Button } from '../ui/Button';
 
 export const Dashboard: React.FC = () => {
-  const { stats, loading, error, ctaSubmissions, payments, sessions, retryFetch, hasError, canRetry } = useAdminData();
+  const { stats, loading, error, recentActivity, ctaSubmissions, payments, sessions, retryFetch, hasError, canRetry } = useAdminData();
 
   const kpis = [
-    { label: 'Imported Leads', value: stats?.total_leads?.toString() || '0', change: '+0%', icon: Users, color: 'blue' },
-    { label: 'Emails Sent', value: stats?.emails_sent?.toString() || '0', change: '+0%', icon: Mail, color: 'purple' },
-    { label: 'CTA Approved', value: stats?.cta_approved?.toString() || '0', change: '+0%', icon: MessageSquare, color: 'orange' },
-    { label: 'Paid Students', value: stats?.payments_paid?.toString() || '0', change: '+0%', icon: DollarSign, color: 'green' },
+    {
+      label: 'Imported Leads',
+      value: stats?.total_leads?.toString() || '0',
+      change: stats?.lead_change ? `${stats.lead_change > 0 ? '+' : ''}${stats.lead_change}%` : '+0%',
+      icon: Users,
+      color: 'blue'
+    },
+    {
+      label: 'Emails Sent',
+      value: stats?.emails_sent?.toString() || '0',
+      change: stats?.email_change ? `${stats.email_change > 0 ? '+' : ''}${stats.email_change}%` : '+0%',
+      icon: Mail,
+      color: 'purple'
+    },
+    {
+      label: 'CTA Approved',
+      value: stats?.cta_approved?.toString() || '0',
+      change: stats?.cta_change ? `${stats.cta_change > 0 ? '+' : ''}${stats.cta_change}%` : '+0%',
+      icon: MessageSquare,
+      color: 'orange'
+    },
+    {
+      label: 'Paid Students',
+      value: stats?.payments_paid?.toString() || '0',
+      change: stats?.payment_change ? `${stats.payment_change > 0 ? '+' : ''}${stats.payment_change}%` : '+0%',
+      icon: DollarSign,
+      color: 'green'
+    },
   ];
 
   const formatTimeAgo = (dateString: string) => {
@@ -38,27 +62,6 @@ export const Dashboard: React.FC = () => {
       default:
         return <AlertCircle size={16} className="text-gray-500" />;
     }
-  };
-
-  const getActivityText = (item: CTASubmission | Payment) => {
-    if ('submission_date' in item) {
-      return `New lead "${item.name}" submitted enquiry`;
-    } else if ('amount' in item) {
-      return `Payment of $${item.amount} received`;
-    }
-    return 'Unknown activity';
-  };
-
-  const getActivityType = (item: CTASubmission | Payment) => {
-    if ('submission_date' in item) return 'cta_submission';
-    if ('amount' in item) return 'payment';
-    return 'unknown';
-  };
-
-  const getActivityTime = (item: CTASubmission | Payment) => {
-    if ('submission_date' in item) return item.submission_date;
-    if ('created_at' in item) return item.created_at;
-    return '';
   };
 
   if (loading) {
@@ -105,10 +108,8 @@ export const Dashboard: React.FC = () => {
     );
   }
 
-  // Combine and sort activities
-  const allActivities = [...ctaSubmissions.slice(0, 5), ...payments.slice(0, 5)]
-    .sort((a, b) => new Date(getActivityTime(b)).getTime() - new Date(getActivityTime(a)).getTime())
-    .slice(0, 8);
+  // Use real activity feed from RPC
+  const displayActivities = recentActivity && recentActivity.length > 0 ? recentActivity.slice(0, 8) : [];
 
   return (
     <div className="space-y-8">
@@ -124,7 +125,7 @@ export const Dashboard: React.FC = () => {
             <div>
               <p className="text-sm text-gray-500 mb-1">{kpi.label}</p>
               <h3 className="text-2xl font-bold text-dark">{kpi.value}</h3>
-              <span className={`text-xs font-medium ${kpi.change.startsWith('+') ? 'text-green-500' : 'text-red-500'}`}>
+              <span className={`text-xs font-medium ${kpi.change.startsWith('+') ? 'text-green-500' : kpi.change.startsWith('-') ? 'text-red-500' : 'text-gray-500'}`}>
                 {kpi.change} from last week
               </span>
             </div>
@@ -143,15 +144,15 @@ export const Dashboard: React.FC = () => {
             Recent Activity
           </h3>
           <div className="space-y-6">
-            {allActivities.length > 0 ? (
-              allActivities.map((item, index) => (
-                <div key={getActivityTime(item) + index} className="flex gap-4">
+            {displayActivities.length > 0 ? (
+              displayActivities.map((item, index) => (
+                <div key={item.id + index} className="flex gap-4">
                   <div className="w-8 h-8 rounded-full bg-gray-50 flex items-center justify-center shrink-0 mt-0.5">
-                    {getActivityIcon(getActivityType(item))}
+                    {getActivityIcon(item.type)}
                   </div>
                   <div className="flex-1">
-                    <p className="text-sm font-medium text-dark">{getActivityText(item)}</p>
-                    <p className="text-xs text-gray-400">{formatTimeAgo(getActivityTime(item))}</p>
+                    <p className="text-sm font-medium text-dark">{item.description}</p>
+                    <p className="text-xs text-gray-400">{formatTimeAgo(item.time)}</p>
                   </div>
                 </div>
               ))

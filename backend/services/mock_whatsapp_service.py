@@ -1,11 +1,15 @@
 import time
 import random
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from utils.supabase_client import supabase
 from config import Config
 
 class MockWhatsAppService:
+    """
+    Enhanced mock WhatsApp service that mimics AiSensy API responses exactly.
+    Includes delivery status progression simulation.
+    """
     def __init__(self):
         self.mock_mode = Config.MOCK_MODE
         self.supabase = supabase
@@ -19,85 +23,315 @@ class MockWhatsAppService:
             print(f"Error logging to Supabase: {e}")
             return None
     
-    def send_message(self, to_number, template_name, params=None):
-        """Mock WhatsApp message sending that logs to Supabase"""
+    def _simulate_delay(self, min_delay=1.0, max_delay=3.0):
+        """Simulate realistic WhatsApp API response time"""
+        time.sleep(random.uniform(min_delay, max_delay))
+    
+    def _generate_campaign_id(self):
+        """Generate AiSensy-style campaign ID"""
+        return f"camp_{uuid.uuid4().hex[:16]}"
+    
+    def _generate_message_id(self):
+        """Generate AiSensy-style message ID"""
+        return f"wa_msg_{uuid.uuid4().hex[:20]}"
+    
+    def _simulate_failure(self, failure_rate=0.05):
+        """Simulate random failures based on failure rate"""
+        return random.random() < failure_rate
+    
+    def send_message(self, to_number, template_name, params=None, campaign_name=None):
+        """
+        Mock WhatsApp message sending that mimics AiSensy API response structure.
+        
+        Returns AiSensy-compatible response:
+        {
+            "success": True,
+            "campaign_id": "camp_abc123...",
+            "message_id": "wa_msg_xyz...",
+            "status": "sent",
+            "destination": "+1234567890",
+            "timestamp": "2025-11-24T10:30:00Z"
+        }
+        """
         if not self.mock_mode:
-            return False
+            return {"success": False, "error": "Mock mode disabled"}
         
-        # Simulate realistic response time
-        time.sleep(0.4 + random.uniform(0, 0.8))
+        # Simulate realistic WhatsApp API response time
+        self._simulate_delay(1.0, 2.5)
         
-        # Simulate success/failure scenarios (95% success rate)
-        success = random.random() > 0.05
+        # Simulate occasional failures (5% failure rate)
+        failed = self._simulate_failure(0.05)
         
-        message_id = str(uuid.uuid4())
+        message_id = self._generate_message_id()
+        campaign_id = self._generate_campaign_id()
+        status = 'failed' if failed else 'sent'
         
-        # Log to whatsapp_logs table
+        # Log to whatsapp_logs table with AiSensy-compatible structure
         log_data = {
-            'id': message_id,
             'to_number': to_number,
             'template_name': template_name,
-            'template_params': params or [],
-            'status': 'sent' if success else 'failed',
+            'template_params': params or {},
+            'status': status,
             'service': 'mock_aisensy',
-            'created_at': datetime.utcnow().isoformat(),
-            'updated_at': datetime.utcnow().isoformat(),
+            'sent_at': datetime.utcnow().isoformat() if not failed else None,
             'metadata': {
                 'mock_mode': True,
-                'simulated_response_time': round(time.time(), 3),
-                'campaign_name': 'mock_campaign'
+                'message_id': message_id,
+                'campaign_id': campaign_id,
+                'campaign_name': campaign_name or 'mock_campaign',
+                'aisensy_status': status,
+                'simulated_at': datetime.utcnow().isoformat()
             }
         }
         
-        # Also log to crm_messages for unified view
+        # Also log to crm_messages for unified communication view
         crm_data = {
-            'id': str(uuid.uuid4()),
-            'lead_id': None,  # Would be populated with actual lead ID
             'channel': 'whatsapp',
             'direction': 'outbound',
-            'content': f"Template: {template_name} - Params: {params}",
-            'status': 'sent' if success else 'failed',
+            'content': f"Template: {template_name}",
+            'status': status,
             'external_message_id': message_id,
-            'created_at': datetime.utcnow().isoformat(),
-            'updated_at': datetime.utcnow().isoformat()
+            'metadata': {
+                'template_params': params or {},
+                'campaign_id': campaign_id
+            },
+            'created_at': datetime.utcnow().isoformat()
         }
         
         self._log_to_supabase('whatsapp_logs', log_data)
         self._log_to_supabase('crm_messages', crm_data)
         
-        if success:
-            print(f"[MOCK] WhatsApp message sent successfully to {to_number}")
-            print(f"[MOCK] Template: {template_name}")
-            print(f"[MOCK] Message ID: {message_id}")
-            return True
+        if not failed:
+            print(f"[MOCK AiSensy] ✓ WhatsApp message sent to {to_number}")
+            print(f"[MOCK AiSensy] Message ID: {message_id}")
+            print(f"[MOCK AiSensy] Template: {template_name}")
+            return {
+                "success": True,
+                "campaign_id": campaign_id,
+                "message_id": message_id,
+                "status": "sent",
+                "destination": to_number,
+                "timestamp": datetime.utcnow().isoformat()
+            }
         else:
-            print(f"[MOCK] Failed to send WhatsApp message to {to_number}")
-            return False
+            print(f"[MOCK AiSensy] ✗ Failed to send WhatsApp message to {to_number}")
+            return {
+                "success": False,
+                "error": "Simulated delivery failure",
+                "error_code": "E001",
+                "destination": to_number
+            }
     
-    def send_bulk_messages(self, contacts, template_name, params=None):
-        """Mock bulk WhatsApp messaging"""
+    def send_bulk_messages(self, contacts, template_name, params=None, campaign_name=None):
+        """
+        Mock bulk WhatsApp messaging that mimics AiSensy batch API.
+        
+        Args:
+            contacts: List of contact dictionaries with phone_number
+            template_name: WhatsApp template name
+            params: Template parameters
+            campaign_name: Campaign identifier
+        
+        Returns AiSensy-compatible batch response:
+        {
+            "success": True,
+            "campaign_id": "camp_xyz...",
+            "sent": 5,
+            "failed": 0,
+            "results": [...]
+        }
+        """
         if not self.mock_mode:
-            return {'sent': 0, 'failed': len(contacts)}
+            return {"success": False, "error": "Mock mode disabled"}
         
-        # Simulate bulk processing time
-        time.sleep(1.5 + random.uniform(0, 2.5))
+        # Simulate bulk processing time (longer than single message)
+        self._simulate_delay(2.0, 4.0)
         
-        results = {'sent': 0, 'failed': 0, 'message_ids': []}
+        campaign_id = self._generate_campaign_id()
+        results = []
+        sent = 0
+        failed = 0
         
         for contact in contacts:
             phone_number = contact.get('phone_number')
+            contact_params = params or contact.get('template_params', {})
             
-            success = self.send_message(
-                phone_number, 
-                template_name, 
-                params or contact.get('template_params', [])
+            # Send individual message
+            result = self.send_message(
+                to_number=phone_number,
+                template_name=template_name,
+                params=contact_params,
+                campaign_name=campaign_name
             )
             
-            if success:
-                results['sent'] += 1
-                results['message_ids'].append(str(uuid.uuid4()))
+            if result['success']:
+                sent += 1
+                results.append({
+                    "destination": phone_number,
+                    "status": "sent",
+                    "message_id": result['message_id']
+                })
             else:
-                results['failed'] += 1
+                failed += 1
+                results.append({
+                    "destination": phone_number,
+                    "status": "failed",
+                    "error": result.get('error', 'Unknown error')
+                })
+        
+        response = {
+            "success": True,
+            "campaign_id": campaign_id,
+            "campaign_name": campaign_name or 'mock_campaign',
+            "sent": sent,
+            "failed": failed,
+            "total": len(contacts),
+            "results": results,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        print(f"[MOCK AiSensy] Campaign {campaign_id}: {sent} sent, {failed} failed")
+        return response
+    
+    def get_message_status(self, message_id):
+        """
+        Mock message status check that mimics AiSensy status API.
+        Simulates status progression: sent → delivered → read
+        
+        Returns:
+        {
+            "message_id": "wa_msg_abc...",
+            "status": "delivered",
+            "events": [...]
+        }
+        """
+        if not self.mock_mode:
+            return {"success": False, "error": "Mock mode disabled"}
+        
+        self._simulate_delay(0.3, 0.8)
+        
+        # Simulate status progression: sent → delivered → read
+        statuses = ['sent', 'delivered', 'read']
+        weights = [0.2, 0.5, 0.3]  # More likely to be delivered or read
+        status = random.choices(statuses, weights=weights)[0]
+        
+        now = datetime.utcnow()
+        events = [
+            {
+                "event": "sent",
+                "timestamp": (now - timedelta(minutes=5)).isoformat(),
+                "reason": "Message sent to WhatsApp server"
+            }
+        ]
+        
+        if status in ['delivered', 'read']:
+            events.append({
+                "event": "delivered",
+                "timestamp": (now - timedelta(minutes=2)).isoformat()
+            })
+        
+        if status == 'read':
+            events.append({
+                "event": "read",
+                "timestamp": now.isoformat()
+            })
+        
+        return {
+            "message_id": message_id,
+            "status": status,
+            "events": events
+        }
+    
+    def send_media_message(self, to_number, media_type, media_url, caption=None):
+        """
+        Mock media message sending (image, PDF, video).
+        
+        Returns:
+        {
+            "success": True,
+            "message_id": "wa_msg_...",
+            "media_type": "image",
+            "status": "sent"
+        }
+        """
+        if not self.mock_mode:
+            return {"success": False, "error": "Mock mode disabled"}
+        
+        self._simulate_delay(1.5, 3.0)
+        
+        failed = self._simulate_failure(0.05)
+        message_id = self._generate_message_id()
+        
+        # Log media message
+        log_data = {
+            'to_number': to_number,
+            'template_name': f'media_{media_type}',
+            'template_params': {
+                'media_url': media_url,
+                'caption': caption or '',
+                'media_type': media_type
+            },
+            'status': 'failed' if failed else 'sent',
+            'service': 'mock_aisensy',
+            'sent_at': datetime.utcnow().isoformat() if not failed else None,
+            'metadata': {
+                'mock_mode': True,
+                'message_id': message_id,
+                'media_message': True,
+                'media_type': media_type
+            }
+        }
+        
+        self._log_to_supabase('whatsapp_logs', log_data)
+        
+        if not failed:
+            print(f"[MOCK AiSensy] ✓ Media message ({media_type}) sent to {to_number}")
+            return {
+                "success": True,
+                "message_id": message_id,
+                "media_type": media_type,
+                "status": "sent",
+                "destination": to_number,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        else:
+            print(f"[MOCK AiSensy] ✗ Failed to send media message to {to_number}")
+            return {
+                "success": False,
+                "error": "Media upload failed",
+                "error_code": "E002"
+            }
+    
+    def get_stats(self):
+        """Get WhatsApp messaging statistics from database"""
+        if not self.mock_mode:
+            return None
+        
+        try:
+            # Get actual stats from Supabase
+            response = self.supabase.table('whatsapp_logs').select('*').execute()
+            all_messages = response.data if response.data else []
+            
+            total_messages = len(all_messages)
+            sent_messages = len([m for m in all_messages if m.get('status') == 'sent'])
+            failed_messages = len([m for m in all_messages if m.get('status') == 'failed'])
+            
+            return {
+                'total_sent': sent_messages,
+                'total_failed': failed_messages,
+                'delivery_rate': round((sent_messages / total_messages * 100), 1) if total_messages > 0 else 0,
+                'last_sent': all_messages[-1].get('sent_at') if all_messages else None,
+                'service': 'mock_aisensy'
+            }
+        except Exception as e:
+            print(f"Error getting WhatsApp stats: {e}")
+            return {
+                'total_sent': 0,
+                'total_failed': 0,
+                'delivery_rate': 0,
+                'last_sent': None,
+                'error': str(e)
+            }
         
         print(f"[MOCK] Bulk WhatsApp completed: {results['sent']} sent, {results['failed']} failed")
         return results

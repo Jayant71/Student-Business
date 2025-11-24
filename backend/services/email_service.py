@@ -29,3 +29,29 @@ class EmailService:
         except Exception as e:
             print(f"Error sending email: {e}")
             return False
+
+
+# Global singleton instance
+_email_service_instance = None
+
+def get_email_service():
+    """
+    Get global EmailService instance (singleton pattern).
+    Uses mock service if MOCK_MODE is enabled.
+    
+    Returns:
+        EmailService or MockEmailService: Email service instance
+    """
+    global _email_service_instance
+    
+    if _email_service_instance is None:
+        # Check if mock mode is enabled
+        if Config.MOCK_MODE:
+            from services.mock_email_service import MockEmailService
+            print("[Email Service] Using MOCK Email service (no real API calls)")
+            _email_service_instance = MockEmailService()
+        else:
+            print("[Email Service] Using REAL SendGrid API")
+            _email_service_instance = EmailService()
+    
+    return _email_service_instance

@@ -2,6 +2,11 @@ from flask import Blueprint, request, jsonify
 from utils.supabase_client import supabase
 from services.payment_service import PaymentService
 from services.mock_payment_service import MockPaymentService
+from services.certificate_service import get_certificate_service
+from services.notification_service import get_notification_service
+from services.support_ticket_service import get_support_ticket_service
+from services.admin_verification_service import AdminVerificationService
+from middleware.validator import validate_request, get_schema
 from config import Config
 from datetime import datetime, timezone
 
@@ -273,3 +278,642 @@ def get_payments():
         return jsonify(mock_payments), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# Certificate Management Routes
+# ============================================================================
+
+@admin_bp.route('/certificates/generate', methods=['POST'])
+def generate_certificate():
+    """Generate a certificate for a student"""
+    try:
+        data = request.json
+        student_id = data.get('student_id')
+        course_name = data.get('course_name')
+        completion_date = data.get('completion_date')
+        grade = data.get('grade')
+        admin_id = data.get('admin_id')
+        
+        if not student_id or not course_name:
+            return jsonify({"error": "student_id and course_name are required"}), 400
+        
+        certificate_service = get_certificate_service(supabase)
+        result = certificate_service.generate_certificate(
+            student_id=student_id,
+            course_name=course_name,
+            completion_date=completion_date,
+            grade=grade,
+            admin_id=admin_id
+        )
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/certificates', methods=['GET'])
+def get_all_certificates():
+    """Get all certificates (admin view)"""
+    try:
+        response = supabase.table('certificates').select(
+            'id, certificate_id, course_name, issued_at, grade, file_url, revoked, profiles(full_name, email)'
+        ).order('issued_at', desc=True).execute()
+        
+        return jsonify(response.data), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/certificates/<certificate_id>', methods=['GET'])
+def get_certificate(certificate_id):
+    """Get specific certificate details"""
+    try:
+        certificate_service = get_certificate_service(supabase)
+        result = certificate_service.verify_certificate(certificate_id)
+        
+        if result.get('valid'):
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 404
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/certificates/<certificate_id>/revoke', methods=['POST'])
+def revoke_certificate(certificate_id):
+    """Revoke a certificate"""
+    try:
+        data = request.json
+        admin_id = data.get('admin_id')
+        reason = data.get('reason', 'No reason provided')
+        
+        if not admin_id:
+            return jsonify({"error": "admin_id is required"}), 400
+        
+        certificate_service = get_certificate_service(supabase)
+        result = certificate_service.revoke_certificate(
+            certificate_id=certificate_id,
+            admin_id=admin_id,
+            reason=reason
+        )
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/students/<student_id>/certificates', methods=['GET'])
+def get_student_certificates(student_id):
+    """Get all certificates for a specific student"""
+    try:
+        certificate_service = get_certificate_service(supabase)
+        certificates = certificate_service.get_student_certificates(student_id)
+        
+        return jsonify(certificates), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# CRM Tag Management Routes
+# ============================================================================
+
+@admin_bp.route('/crm/tags', methods=['GET'])
+def get_crm_tags():
+    """Get all CRM tags"""
+    try:
+        response = supabase.table('contact_tags').select('*').order('name').execute()
+        return jsonify(response.data), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/crm/tags', methods=['POST'])
+def create_crm_tag():
+    """Create a new CRM tag"""
+    try:
+        data = request.json
+        name = data.get('name')
+        color = data.get('color', 'gray')
+        description = data.get('description')
+        
+        if not name:
+            return jsonify({"error": "name is required"}), 400
+        
+        response = supabase.table('contact_tags').insert({
+            'name': name,
+            'color': color,
+            'description': description
+        }).execute()
+        
+        return jsonify(response.data[0]), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/crm/contacts/<contact_id>/tags', methods=['POST'])
+def assign_tag_to_contact(contact_id):
+    """Assign a tag to a contact"""
+    try:
+        data = request.json
+        tag_id = data.get('tag_id')
+        admin_id = data.get('admin_id')
+        
+        if not tag_id:
+            return jsonify({"error": "tag_id is required"}), 400
+        
+        response = supabase.table('contact_tag_assignments').insert({
+            'contact_id': contact_id,
+            'tag_id': tag_id,
+            'assigned_by': admin_id
+        }).execute()
+        
+        return jsonify(response.data[0]), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/crm/contacts/<contact_id>/tags/<tag_id>', methods=['DELETE'])
+def remove_tag_from_contact(contact_id, tag_id):
+    """Remove a tag from a contact"""
+    try:
+        supabase.table('contact_tag_assignments').delete().eq(
+            'contact_id', contact_id
+        ).eq('tag_id', tag_id).execute()
+        
+        return jsonify({"success": True}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/crm/contacts/with-tags', methods=['GET'])
+def get_contacts_with_tags():
+    """Get all contacts with their tags"""
+    try:
+        # Call the database function
+        response = supabase.rpc('get_contacts_with_tags').execute()
+        return jsonify(response.data), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/crm/messages/search', methods=['GET'])
+def search_crm_messages():
+    """Search CRM messages with filters"""
+    try:
+        search_text = request.args.get('search')
+        contact_id = request.args.get('contact_id')
+        channel = request.args.get('channel')
+        important_only = request.args.get('important') == 'true'
+        archived = request.args.get('archived') == 'true'
+        
+        response = supabase.rpc('search_crm_messages', {
+            'search_text': search_text,
+            'contact_filter': contact_id,
+            'channel_filter': channel,
+            'important_only': important_only,
+            'archived_filter': archived
+        }).execute()
+        
+        return jsonify(response.data), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/crm/messages/<message_id>/important', methods=['PATCH'])
+def toggle_message_important(message_id):
+    """Toggle important flag on a message"""
+    try:
+        data = request.json
+        is_important = data.get('is_important', False)
+        
+        response = supabase.table('crm_messages').update({
+            'is_important': is_important
+        }).eq('id', message_id).execute()
+        
+        return jsonify(response.data[0]), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/crm/messages/<message_id>/archive', methods=['PATCH'])
+def toggle_message_archive(message_id):
+    """Toggle archive flag on a message"""
+    try:
+        data = request.json
+        is_archived = data.get('is_archived', False)
+        
+        response = supabase.table('crm_messages').update({
+            'is_archived': is_archived
+        }).eq('id', message_id).execute()
+        
+        return jsonify(response.data[0]), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# Notification Routes
+# ============================================================================
+
+@admin_bp.route('/notifications', methods=['GET'])
+def get_notifications():
+    """Get notifications for the current user"""
+    try:
+        user_id = request.args.get('user_id')
+        unread_only = request.args.get('unread_only') == 'true'
+        limit = int(request.args.get('limit', 50))
+        
+        if not user_id:
+            return jsonify({"error": "user_id is required"}), 400
+        
+        notification_service = get_notification_service(supabase)
+        notifications = notification_service.get_user_notifications(
+            user_id=user_id,
+            unread_only=unread_only,
+            limit=limit
+        )
+        
+        return jsonify(notifications), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/notifications/unread-count', methods=['GET'])
+def get_unread_count():
+    """Get count of unread notifications"""
+    try:
+        user_id = request.args.get('user_id')
+        
+        if not user_id:
+            return jsonify({"error": "user_id is required"}), 400
+        
+        notification_service = get_notification_service(supabase)
+        count = notification_service.get_unread_count(user_id)
+        
+        return jsonify({"count": count}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/notifications/<notification_id>/read', methods=['PATCH'])
+def mark_notification_read(notification_id):
+    """Mark a notification as read"""
+    try:
+        notification_service = get_notification_service(supabase)
+        result = notification_service.mark_as_read(notification_id)
+        
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/notifications/mark-all-read', methods=['POST'])
+def mark_all_notifications_read():
+    """Mark all notifications as read for a user"""
+    try:
+        data = request.json
+        user_id = data.get('user_id')
+        
+        if not user_id:
+            return jsonify({"error": "user_id is required"}), 400
+        
+        notification_service = get_notification_service(supabase)
+        result = notification_service.mark_all_as_read(user_id)
+        
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/notifications/<notification_id>', methods=['DELETE'])
+def delete_notification(notification_id):
+    """Delete a notification"""
+    try:
+        notification_service = get_notification_service(supabase)
+        result = notification_service.delete_notification(notification_id)
+        
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# Support Ticket Routes
+# ============================================================================
+
+@admin_bp.route('/support/tickets', methods=['GET'])
+def get_support_tickets():
+    """Get all support tickets with optional filters"""
+    try:
+        status = request.args.get('status')
+        priority = request.args.get('priority')
+        assigned_to = request.args.get('assigned_to')
+        
+        ticket_service = get_support_ticket_service(supabase)
+        tickets = ticket_service.get_all_tickets(
+            status_filter=status,
+            priority_filter=priority,
+            assigned_to=assigned_to
+        )
+        
+        return jsonify(tickets), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/support/tickets', methods=['POST'])
+def create_support_ticket():
+    """Create a new support ticket"""
+    try:
+        data = request.json
+        student_id = data.get('student_id')
+        subject = data.get('subject')
+        description = data.get('description')
+        category = data.get('category')
+        priority = data.get('priority', 'medium')
+        
+        if not student_id or not subject or not description:
+            return jsonify({"error": "student_id, subject, and description are required"}), 400
+        
+        ticket_service = get_support_ticket_service(supabase)
+        result = ticket_service.create_ticket(
+            student_id=student_id,
+            subject=subject,
+            description=description,
+            category=category,
+            priority=priority
+        )
+        
+        if result['success']:
+            return jsonify(result['ticket']), 201
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/support/tickets/<ticket_id>', methods=['GET'])
+def get_support_ticket(ticket_id):
+    """Get specific ticket with replies"""
+    try:
+        ticket_service = get_support_ticket_service(supabase)
+        result = ticket_service.get_ticket_with_replies(ticket_id)
+        
+        if result['success']:
+            return jsonify(result['ticket']), 200
+        else:
+            return jsonify(result), 404
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/support/tickets/<ticket_id>/status', methods=['PATCH'])
+def update_ticket_status(ticket_id):
+    """Update ticket status"""
+    try:
+        data = request.json
+        status = data.get('status')
+        admin_id = data.get('admin_id')
+        
+        if not status:
+            return jsonify({"error": "status is required"}), 400
+        
+        ticket_service = get_support_ticket_service(supabase)
+        result = ticket_service.update_ticket_status(
+            ticket_id=ticket_id,
+            status=status,
+            admin_id=admin_id
+        )
+        
+        if result['success']:
+            return jsonify(result['ticket']), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/support/tickets/<ticket_id>/assign', methods=['PATCH'])
+def assign_support_ticket(ticket_id):
+    """Assign ticket to an admin"""
+    try:
+        data = request.json
+        admin_id = data.get('admin_id')
+        
+        if not admin_id:
+            return jsonify({"error": "admin_id is required"}), 400
+        
+        ticket_service = get_support_ticket_service(supabase)
+        result = ticket_service.assign_ticket(
+            ticket_id=ticket_id,
+            admin_id=admin_id
+        )
+        
+        if result['success']:
+            return jsonify(result['ticket']), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/support/tickets/<ticket_id>/replies', methods=['POST'])
+def add_ticket_reply(ticket_id):
+    """Add a reply to a support ticket"""
+    try:
+        data = request.json
+        author_id = data.get('author_id')
+        message = data.get('message')
+        is_internal_note = data.get('is_internal_note', False)
+        
+        if not author_id or not message:
+            return jsonify({"error": "author_id and message are required"}), 400
+        
+        ticket_service = get_support_ticket_service(supabase)
+        result = ticket_service.add_reply(
+            ticket_id=ticket_id,
+            author_id=author_id,
+            message=message,
+            is_internal_note=is_internal_note
+        )
+        
+        if result['success']:
+            return jsonify(result['reply']), 201
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/support/students/<student_id>/tickets', methods=['GET'])
+def get_student_support_tickets(student_id):
+    """Get all tickets for a specific student"""
+    try:
+        ticket_service = get_support_ticket_service(supabase)
+        tickets = ticket_service.get_student_tickets(student_id)
+        
+        return jsonify(tickets), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/support/stats', methods=['GET'])
+def get_support_stats():
+    """Get support ticket statistics"""
+    try:
+        response = supabase.rpc('get_ticket_stats').execute()
+        return jsonify(response.data[0] if response.data else {}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# =============================================================================
+# ADMIN VERIFICATION ROUTES
+# =============================================================================
+
+@admin_bp.route('/verification/request', methods=['POST'])
+@validate_request(get_schema('admin_request'))
+def request_admin_access():
+    """Submit a request for admin access (public endpoint)"""
+    try:
+        data = request.validated_data
+        
+        result = AdminVerificationService.request_admin_access(
+            email=data['email'],
+            full_name=data['full_name'],
+            phone=data.get('phone'),
+            reason=data['reason']
+        )
+        
+        return jsonify(result), 201
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/verification/requests', methods=['GET'])
+def get_admin_requests():
+    """Get all admin requests (optionally filtered by status)"""
+    try:
+        status = request.args.get('status')
+        requests = AdminVerificationService.get_all_requests(status)
+        
+        return jsonify(requests), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/verification/requests/pending', methods=['GET'])
+def get_pending_admin_requests():
+    """Get all pending admin requests"""
+    try:
+        requests = AdminVerificationService.get_pending_requests()
+        return jsonify(requests), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/verification/requests/<request_id>/approve', methods=['POST'])
+@validate_request({
+    'reviewer_id': {'required': True, 'type': 'uuid'},
+    'notes': {'required': False, 'type': 'str', 'max_length': 500}
+})
+def approve_admin_request(request_id):
+    """Approve an admin access request"""
+    try:
+        data = request.validated_data
+        
+        result = AdminVerificationService.approve_request(
+            request_id=request_id,
+            reviewer_id=data['reviewer_id'],
+            notes=data.get('notes')
+        )
+        
+        return jsonify(result), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/verification/requests/<request_id>/reject', methods=['POST'])
+@validate_request({
+    'reviewer_id': {'required': True, 'type': 'uuid'},
+    'reason': {'required': True, 'type': 'str', 'min_length': 10, 'max_length': 500}
+})
+def reject_admin_request(request_id):
+    """Reject an admin access request"""
+    try:
+        data = request.validated_data
+        
+        result = AdminVerificationService.reject_request(
+            request_id=request_id,
+            reviewer_id=data['reviewer_id'],
+            reason=data['reason']
+        )
+        
+        return jsonify(result), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/verification/verify-token', methods=['POST'])
+@validate_request({
+    'token': {'required': True, 'type': 'str', 'min_length': 32, 'max_length': 64}
+})
+def verify_admin_token():
+    """Verify an admin verification token"""
+    try:
+        data = request.validated_data
+        result = AdminVerificationService.verify_token(data['token'])
+        
+        return jsonify(result), 200
+    except ValueError as e:
+        return jsonify({"error": str(e), "valid": False}), 400
+    except Exception as e:
+        return jsonify({"error": str(e), "valid": False}), 500
+
+
+@admin_bp.route('/verification/complete-setup', methods=['POST'])
+@validate_request({
+    'token': {'required': True, 'type': 'str', 'min_length': 32, 'max_length': 64},
+    'user_id': {'required': True, 'type': 'uuid'}
+})
+def complete_admin_setup():
+    """Complete admin account setup after auth signup"""
+    try:
+        data = request.validated_data
+        
+        result = AdminVerificationService.complete_admin_setup(
+            token=data['token'],
+            user_id=data['user_id']
+        )
+        
+        return jsonify(result), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+

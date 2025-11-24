@@ -3,7 +3,17 @@ import { Video, Eye, Upload, X, RefreshCw } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { FileUpload } from '../ui/FileUpload';
 import { useToast } from '../../src/context/ToastContext';
-import { recordingService, RecordingWithSession, SessionOption } from '../../src/services/recording-service';
+import { recordingService } from '../../src/services/recording-service';
+import { RecordingWithSession } from '../../types';
+
+// Define local interface to avoid import issues
+interface RecordingSessionOption {
+  id: string;
+  title: string;
+  session_date: string;
+  start_time: string;
+  status: string;
+}
 
 interface RecordingFormState {
   title: string;
@@ -34,7 +44,7 @@ export const RecordingManagement: React.FC = () => {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [form, setForm] = useState<RecordingFormState>(DEFAULT_FORM);
-  const [sessionOptions, setSessionOptions] = useState<SessionOption[]>([]);
+  const [sessionOptions, setSessionOptions] = useState<RecordingSessionOption[]>([]);
   const [fetchingSessions, setFetchingSessions] = useState(false);
 
   const loadRecordings = async () => {
@@ -43,7 +53,9 @@ export const RecordingManagement: React.FC = () => {
       const result = await recordingService.list({ includeHidden: true, limit: 60 });
       setRecordings(result);
     } catch (err: any) {
-      toast.showError('Failed to load recordings', err.message || 'Unexpected error');
+      const errorMessage = err?.message || err?.error || 'Failed to load recordings';
+      toast.showError('Failed to load recordings', errorMessage);
+      console.error('Failed to load recordings:', err);
     } finally {
       setLoading(false);
     }
@@ -55,7 +67,9 @@ export const RecordingManagement: React.FC = () => {
       const result = await recordingService.fetchSessionOptions();
       setSessionOptions(result);
     } catch (err: any) {
-      toast.showError('Failed to load sessions', err.message || 'Unexpected error');
+      const errorMessage = err?.message || err?.error || 'Failed to load sessions';
+      toast.showError('Failed to load sessions', errorMessage);
+      console.error('Failed to load sessions:', err);
     } finally {
       setFetchingSessions(false);
     }
@@ -85,11 +99,13 @@ export const RecordingManagement: React.FC = () => {
       });
 
       setRecordings(prev => [created, ...prev]);
-      toast.showSuccess('Recording uploaded');
+      toast.showSuccess('Recording uploaded successfully');
       setForm(DEFAULT_FORM);
       setShowUploadModal(false);
     } catch (err: any) {
-      toast.showError('Upload failed', err.message || 'Could not save recording');
+      const errorMessage = err?.message || err?.error || 'Could not save recording';
+      toast.showError('Upload failed', errorMessage);
+      console.error('Failed to upload recording:', err);
     } finally {
       setUploading(false);
     }
@@ -97,6 +113,7 @@ export const RecordingManagement: React.FC = () => {
 
   const handleUploadError = (error: string) => {
     toast.showError('Upload failed', error);
+    console.error('File upload error:', error);
   };
 
   const toggleVisibility = async (recording: RecordingWithSession) => {
@@ -105,8 +122,11 @@ export const RecordingManagement: React.FC = () => {
       setRecordings(prev => prev.map(r =>
         r.id === recording.id ? { ...r, visible_to_students: !r.visible_to_students } : r
       ));
+      toast.showSuccess(`Recording ${!recording.visible_to_students ? 'visible' : 'hidden'} to students`);
     } catch (err: any) {
-      toast.showError('Update failed', err.message || 'Could not update visibility');
+      const errorMessage = err?.message || err?.error || 'Could not update visibility';
+      toast.showError('Update failed', errorMessage);
+      console.error('Failed to toggle visibility:', err);
     }
   };
 
@@ -180,7 +200,12 @@ export const RecordingManagement: React.FC = () => {
                       {recording.visible_to_students ? 'Visible' : 'Hidden'}
                     </span>
                   </div>
-                  <Button size="sm" variant="outline" onClick={() => window.open(recording.video_url, '_blank')}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => recording.video_url && window.open(recording.video_url, '_blank')}
+                    disabled={!recording.video_url}
+                  >
                     <Eye size={14} />
                   </Button>
                 </div>
